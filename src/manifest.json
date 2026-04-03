@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Glassbox Insight Agent",
+  "version": "1.0.0",
+  "description": "Privacy-first background analytics and time-tracking for educational environments.",
+  "permissions": [
+    "storage",
+    "identity",
+    "alarms",
+    "tabs",
+    "idle"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["config.json"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

@@ -113,22 +113,35 @@ async function updateActiveSession(newUrl, isIdleOrInactive) {
 // 🎧 BROWSER EVENT LISTENERS
 // ==========================================
 
+// Cache to prevent double-counting hits on complex page loads
+const tabUrlCache = {};
+
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
     const tab = await chrome.tabs.get(activeInfo.tabId);
     await updateActiveSession(tab.url, false);
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    // Only fire when the URL actually changes (a true navigation/hit)
-    if (changeInfo.url) {
+    // 1. Capture SPA routing (changeInfo.url) OR full page loads (status === 'complete')
+    const triggeredUrl = changeInfo.url || (changeInfo.status === 'complete' ? tab.url : null);
+
+    // 2. Only process if we found a URL AND it's different from the last logged URL in this tab
+    if (triggeredUrl && tabUrlCache[tabId] !== triggeredUrl) {
+        tabUrlCache[tabId] = triggeredUrl; // Update the cache
+
         // Record the exact URL hit for the Audit logs
-        await recordUrlHit(changeInfo.url);
+        await recordUrlHit(triggeredUrl);
         
         // Update time tracking if this is the active tab
         if (tab.active) {
-            await updateActiveSession(changeInfo.url, false);
+            await updateActiveSession(triggeredUrl, false);
         }
     }
+});
+
+// Clean up our memory cache when a tab is closed to prevent memory leaks
+chrome.tabs.onRemoved.addListener((tabId) => {
+    delete tabUrlCache[tabId];
 });
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {

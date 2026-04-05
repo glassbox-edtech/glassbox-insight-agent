@@ -113,34 +113,53 @@ async function updateActiveSession(newUrl, isIdleOrInactive) {
 // 🎧 BROWSER EVENT LISTENERS
 // ==========================================
 
-// Cache to prevent double-counting hits on complex page loads
+const DEBUG_MODE = true; // Toggle to false for production
 const tabUrlCache = {};
+
+function debugLog(message, data = null) {
+    if (DEBUG_MODE) {
+        if (data) {
+            console.log(`[DEBUG] ${message}`, data);
+        } else {
+            console.log(`[DEBUG] ${message}`);
+        }
+    }
+}
 
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
     const tab = await chrome.tabs.get(activeInfo.tabId);
+    debugLog("Tab Activated. Raw Tab Object:", tab);
     await updateActiveSession(tab.url, false);
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    // 1. Capture SPA routing (changeInfo.url) OR full page loads (status === 'complete')
+    debugLog(`Tab ${tabId} Updated. changeInfo:`, changeInfo);
+    debugLog(`Tab ${tabId} Updated. tab object:`, tab);
+
+    // 1. Capture SPA routing OR full page loads
     const triggeredUrl = changeInfo.url || (changeInfo.status === 'complete' ? tab.url : null);
+    
+    debugLog(`Calculated triggeredUrl: ${triggeredUrl}`);
 
-    // 2. Only process if we found a URL AND it's different from the last logged URL in this tab
+    // 2. Only process if we found a URL AND it's different from the last logged URL
     if (triggeredUrl && tabUrlCache[tabId] !== triggeredUrl) {
-        tabUrlCache[tabId] = triggeredUrl; // Update the cache
+        debugLog(`🎯 HIT RECORDED! Domain: ${triggeredUrl}`);
+        tabUrlCache[tabId] = triggeredUrl; 
 
-        // Record the exact URL hit for the Audit logs
         await recordUrlHit(triggeredUrl);
         
-        // Update time tracking if this is the active tab
         if (tab.active) {
             await updateActiveSession(triggeredUrl, false);
         }
+    } else if (triggeredUrl === tabUrlCache[tabId]) {
+        debugLog(`Skipped hit: URL already cached for tab ${tabId}`);
+    } else {
+        debugLog("Skipped hit: No valid URL found in event payload.");
     }
 });
 
-// Clean up our memory cache when a tab is closed to prevent memory leaks
 chrome.tabs.onRemoved.addListener((tabId) => {
+    debugLog(`Tab ${tabId} closed. Clearing cache.`);
     delete tabUrlCache[tabId];
 });
 

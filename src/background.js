@@ -128,33 +128,40 @@ function debugLog(message, data = null) {
 
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
     const tab = await chrome.tabs.get(activeInfo.tabId);
+    if (!tab || !tab.url) return;
+
     debugLog("Tab Activated. Raw Tab Object:", tab);
+
+    // 🎯 FIX: Edge Case Catch. If tab updated in the background and we missed the event,
+    // catch the new hit the moment the user actually switches to look at the tab!
+    if (tab.url !== tabUrlCache[activeInfo.tabId]) {
+        tabUrlCache[activeInfo.tabId] = tab.url;
+        await recordUrlHit(tab.url);
+    }
+
     await updateActiveSession(tab.url, false);
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+    // Ignore if Chrome hasn't attached a URL to the tab object yet
+    if (!tab.url) return;
+
     debugLog(`Tab ${tabId} Updated. changeInfo:`, changeInfo);
-    debugLog(`Tab ${tabId} Updated. tab object:`, tab);
-
-    // 1. Capture SPA routing OR full page loads
-    const triggeredUrl = changeInfo.url || (changeInfo.status === 'complete' ? tab.url : null);
     
-    debugLog(`Calculated triggeredUrl: ${triggeredUrl}`);
-
-    // 2. Only process if we found a URL AND it's different from the last logged URL
-    if (triggeredUrl && tabUrlCache[tabId] !== triggeredUrl) {
-        debugLog(`🎯 HIT RECORDED! Domain: ${triggeredUrl}`);
-        tabUrlCache[tabId] = triggeredUrl; 
-
-        await recordUrlHit(triggeredUrl);
+    // 🎯 FIX: The "Infinite Loading Game" Bug
+    // Heavy games like Eaglercraft open WebSockets or lock the main thread, 
+    // preventing the DOM from ever reaching changeInfo.status === 'complete'.
+    // Instead of waiting for 'complete', we now track hits purely by comparing 
+    // the tab's current absolute URL against our internal cache.
+    if (tab.url !== tabUrlCache[tabId]) {
+        debugLog(`🎯 HIT RECORDED! Domain: ${tab.url}`);
+        tabUrlCache[tabId] = tab.url; 
+        
+        await recordUrlHit(tab.url);
         
         if (tab.active) {
-            await updateActiveSession(triggeredUrl, false);
+            await updateActiveSession(tab.url, false);
         }
-    } else if (triggeredUrl === tabUrlCache[tabId]) {
-        debugLog(`Skipped hit: URL already cached for tab ${tabId}`);
-    } else {
-        debugLog("Skipped hit: No valid URL found in event payload.");
     }
 });
 
@@ -230,7 +237,7 @@ async function uploadLogs() {
 
         const masterLogs = [];
 
-        // 1. Process Time Logs (Filtered by 5-minute rule)
+        // 1. Process Time Logs (Filtered by threshold rule)
         for (const [domain, minutes] of Object.entries(timeLogs)) {
             if (approvedSet.has(domain) || minutes >= threshold) {
                 masterLogs.push({ type: "time", target: domain, value: minutes });

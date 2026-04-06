@@ -33,6 +33,13 @@ chrome.runtime.onInstalled.addListener(async () => {
     }
 });
 
+// 🎯 FIX 4: The Ghost Session Cleanup
+// Clears out dangling active sessions if Chrome crashed or the battery died
+chrome.runtime.onStartup.addListener(async () => {
+    console.log("🧹 Chrome started. Cleaning up ghost sessions...");
+    await chrome.storage.local.set({ activeSession: null });
+});
+
 // ==========================================
 // ⏱️ THE STOPWATCH & HIT TRACKER
 // ==========================================
@@ -40,7 +47,9 @@ chrome.runtime.onInstalled.addListener(async () => {
 // Helper 1: Extract domain for ROI Time Tracking
 function extractDomain(urlStr) {
     try {
-        const urlObj = new URL(urlStr);
+        // 🎯 FIX 1: Strip hash fragments (e.g., #section1) to prevent fake SPA navigations
+        const cleanUrl = urlStr.split('#')[0];
+        const urlObj = new URL(cleanUrl);
         if (!urlObj.protocol.startsWith('http')) return null;
         return urlObj.hostname.replace(/^www\./, '');
     } catch (e) {
@@ -51,7 +60,9 @@ function extractDomain(urlStr) {
 // Helper 2: URL Normalizer for Audit Hit Tracking (Strips Query Params)
 function normalizeUrl(urlStr) {
     try {
-        const urlObj = new URL(urlStr);
+        // 🎯 FIX 1: Strip hash fragments here as well
+        const cleanUrl = urlStr.split('#')[0];
+        const urlObj = new URL(cleanUrl);
         if (!urlObj.protocol.startsWith('http')) return null;
         
         const domain = urlObj.hostname.replace(/^www\./, '');
@@ -132,8 +143,6 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 
     debugLog("Tab Activated. Raw Tab Object:", tab);
 
-    // 🎯 FIX: Edge Case Catch. If tab updated in the background and we missed the event,
-    // catch the new hit the moment the user actually switches to look at the tab!
     if (tab.url !== tabUrlCache[activeInfo.tabId]) {
         tabUrlCache[activeInfo.tabId] = tab.url;
         await recordUrlHit(tab.url);
@@ -143,16 +152,9 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    // Ignore if Chrome hasn't attached a URL to the tab object yet
     if (!tab.url) return;
-
     debugLog(`Tab ${tabId} Updated. changeInfo:`, changeInfo);
     
-    // 🎯 FIX: The "Infinite Loading Game" Bug
-    // Heavy games like Eaglercraft open WebSockets or lock the main thread, 
-    // preventing the DOM from ever reaching changeInfo.status === 'complete'.
-    // Instead of waiting for 'complete', we now track hits purely by comparing 
-    // the tab's current absolute URL against our internal cache.
     if (tab.url !== tabUrlCache[tabId]) {
         debugLog(`🎯 HIT RECORDED! Domain: ${tab.url}`);
         tabUrlCache[tabId] = tab.url; 
@@ -162,6 +164,42 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
         if (tab.active) {
             await updateActiveSession(tab.url, false);
         }
+    }
+});
+
+// 🎯 FIX 2: Single Page Applications (SPAs)
+// Intercepts History API changes (React/Angular) that don't trigger full page reloads
+if (chrome.webNavigation) {
+    chrome.webNavigation.onHistoryStateUpdated.addListener(async (details) => {
+        if (details.frameId === 0) { // Only track the main frame, ignore iframes
+            debugLog(`🔄 SPA Navigation detected: ${details.url}`);
+            if (details.url !== tabUrlCache[details.tabId]) {
+                tabUrlCache[details.tabId] = details.url;
+                await recordUrlHit(details.url);
+
+                const tab = await chrome.tabs.get(details.tabId);
+                if (tab.active) {
+                    await updateActiveSession(details.url, false);
+                }
+            }
+        }
+    });
+}
+
+// 🎯 FIX 3: The Tab Replacement Quirk
+// Prevents losing the timer when Chrome silently swaps a background tab into the foreground
+chrome.tabs.onReplaced.addListener(async (addedTabId, removedTabId) => {
+    debugLog(`🔄 Tab ${removedTabId} was replaced by ${addedTabId}`);
+    
+    if (tabUrlCache[removedTabId]) {
+        tabUrlCache[addedTabId] = tabUrlCache[removedTabId];
+        delete tabUrlCache[removedTabId];
+    }
+    
+    // Check if the replaced tab is the one they are actively looking at
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tabs.length > 0 && tabs[0].id === addedTabId) {
+        await updateActiveSession(tabs[0].url, false);
     }
 });
 

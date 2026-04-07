@@ -18,12 +18,9 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: '20'
-        cache: 'npm' # Speeds up subsequent runs by caching dependencies
 
     - name: Install dependencies
-      # Using npm ci (clean install) is best practice for CI environments 
-      # as it strictly follows the package-lock.json versions
-      run: npm ci
+      run: npm install
 
     - name: Run Vitest test suite
       run: npm test

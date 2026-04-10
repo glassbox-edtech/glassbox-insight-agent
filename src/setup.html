@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome to Glassbox</title>
+    <style>
+        /* Modern CSS matching the Glassbox ecosystem */
+        :root {
+            --bg-color: #f3f4f6;
+            --card-bg: #ffffff;
+            --text-main: #1f2937;
+            --text-muted: #6b7280;
+            --border-color: #e5e7eb;
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --success: #059669;
+            --success-bg: #d1fae5;
+            --danger: #dc2626;
+            --danger-bg: #fee2e2;
+            --input-bg: #ffffff;
+            --input-border: #d1d5db;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-color: #0f172a;
+                --card-bg: #1e293b;
+                --text-main: #f8fafc;
+                --text-muted: #94a3b8;
+                --border-color: #334155;
+                --primary: #3b82f6;
+                --primary-hover: #60a5fa;
+                --success: #10b981;
+                --success-bg: #064e3b;
+                --danger: #ef4444;
+                --danger-bg: #450a0a;
+                --input-bg: #0f172a;
+                --input-border: #475569;
+            }
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+
+        .container {
+            background: var(--card-bg);
+            padding: 3rem 2.5rem;
+            border-radius: 16px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.05);
+            max-width: 450px;
+            width: 90%;
+            text-align: center;
+            border: 1px solid var(--border-color);
+        }
+
+        .icon {
+            font-size: 3.5rem;
+            margin-bottom: 1rem;
+        }
+
+        h1 {
+            margin-top: 0;
+            font-size: 1.5rem;
+        }
+
+        p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            line-height: 1.5;
+            margin-bottom: 2rem;
+        }
+
+        select {
+            width: 100%;
+            padding: 0.85rem;
+            border-radius: 8px;
+            border: 1px solid var(--input-border);
+            background-color: var(--input-bg);
+            color: var(--text-main);
+            font-size: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        button {
+            width: 100%;
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            padding: 0.85rem;
+            border-radius: 8px;
+            font-weight: bold;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        button:hover:not(:disabled) {
+            background-color: var(--primary-hover);
+        }
+
+        button:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+
+        .status {
+            margin-top: 1rem;
+            padding: 1rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            display: none;
+        }
+
+        .status.error {
+            background-color: var(--danger-bg);
+            color: var(--danger);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            display: block;
+        }
+
+        .status.success {
+            background-color: var(--success-bg);
+            color: var(--success);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            display: block;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container" id="setupContainer">
+        <div class="icon">🎓</div>
+        <h1>Welcome to Glassbox</h1>
+        <p>To ensure you have access to the right classroom resources, please select your school from the list below.</p>
+        
+        <select id="schoolSelect" disabled>
+            <option value="">Loading schools...</option>
+        </select>
+        
+        <button id="connectBtn" disabled>Connect to School</button>
+        
+        <div id="statusMsg" class="status"></div>
+    </div>
+
+    <div class="container" id="successContainer" style="display: none;">
+        <div class="icon">✅</div>
+        <h1>Successfully Connected!</h1>
+        <p>Your device is now securely registered to your school's network. You may close this tab and continue browsing.</p>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', async () => {
+            const select = document.getElementById('schoolSelect');
+            const btn = document.getElementById('connectBtn');
+            const statusMsg = document.getElementById('statusMsg');
+            let workerUrl = '';
+
+            function showError(msg) {
+                statusMsg.textContent = msg;
+                statusMsg.className = 'status error';
+            }
+
+            try {
+                // 1. Fetch Worker URL from config.json
+                const configRes = await fetch(chrome.runtime.getURL('config.json'));
+                const config = await configRes.json();
+                workerUrl = config.workerUrl.endsWith('/') ? config.workerUrl.slice(0, -1) : config.workerUrl;
+
+                // 2. Fetch the public list of schools
+                const schoolsRes = await fetch(`${workerUrl}/api/schools/public`);
+                if (!schoolsRes.ok) throw new Error("Could not load schools.");
+                
+                const data = await schoolsRes.json();
+                
+                select.innerHTML = '<option value="" disabled selected>-- Select your school --</option>';
+                data.schools.forEach(school => {
+                    const option = document.createElement('option');
+                    option.value = school.id;
+                    option.textContent = school.name;
+                    select.appendChild(option);
+                });
+
+                select.disabled = false;
+
+                select.addEventListener('change', () => {
+                    btn.disabled = !select.value;
+                });
+
+            } catch (err) {
+                console.error(err);
+                showError("Failed to connect to the Glassbox network. Please check your internet connection.");
+                select.innerHTML = '<option value="">Network Error</option>';
+            }
+
+            // 3. Handle Registration
+            btn.addEventListener('click', async () => {
+                const schoolId = select.value;
+                if (!schoolId) return;
+
+                btn.disabled = true;
+                btn.textContent = "Registering...";
+                statusMsg.style.display = 'none';
+
+                try {
+                    // Grab the pre-hashed identity from local storage
+                    const localData = await chrome.storage.local.get('studentHash');
+                    if (!localData.studentHash) {
+                        throw new Error("Identity hash not found. Please restart the extension.");
+                    }
+
+                    // Register with the server (Server-Side Lock enforced here)
+                    const regRes = await fetch(`${workerUrl}/api/student/register`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            studentHash: localData.studentHash,
+                            schoolId: parseInt(schoolId)
+                        })
+                    });
+
+                    if (!regRes.ok) {
+                        const errData = await regRes.json();
+                        throw new Error(errData.error || "Registration failed.");
+                    }
+
+                    // Success! Save the locked ID to local storage
+                    await chrome.storage.local.set({ schoolId: parseInt(schoolId) });
+
+                    // Update UI
+                    document.getElementById('setupContainer').style.display = 'none';
+                    document.getElementById('successContainer').style.display = 'block';
+
+                } catch (err) {
+                    console.error(err);
+                    showError(err.message);
+                    btn.disabled = false;
+                    btn.textContent = "Connect to School";
+                }
+            });
+        });
+    </script>
+</body>
+</html>

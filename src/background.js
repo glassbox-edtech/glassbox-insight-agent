@@ -122,12 +122,22 @@ function normalizeUrl(urlStr) {
         
         // Smart Query String Allowlist
         let queryString = '';
-        if (domain === 'youtube.com' && urlObj.searchParams.has('v')) {
-            queryString = `?v=${urlObj.searchParams.get('v')}`;
-        } else if ((domain === 'google.com' || domain === 'bing.com') && urlObj.searchParams.has('q')) {
-            queryString = `?q=${urlObj.searchParams.get('q')}`;
-        } 
-        // For docs.google.com and everything else, queryString remains empty, stripping all tokens!
+        switch (domain) {
+            case 'youtube.com':
+                if (urlObj.searchParams.has('v')) {
+                    queryString = `?v=${urlObj.searchParams.get('v')}`;
+                }
+                break;
+            case 'google.com':
+            case 'bing.com':
+                if (urlObj.searchParams.has('q')) {
+                    queryString = `?q=${urlObj.searchParams.get('q')}`;
+                }
+                break;
+            default:
+                // For docs.google.com and everything else, queryString remains empty, stripping all tokens!
+                break;
+        }
 
         return domain + path + queryString;
     } catch (e) {

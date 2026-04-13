@@ -29,7 +29,7 @@ async function performHandshake(studentHash) {
 // 🚀 INITIALIZATION & SETUP
 // ==========================================
 chrome.runtime.onInstalled.addListener(async () => {
-    console.log("Glassbox Insight Installed. Initializing Engine...");
+    console.log("Glassbox Insight Installed. Initializing Engine v1.2.0...");
 
     // 1. Set Chrome to detect "Idle" state after 60 seconds of no mouse/keyboard input
     chrome.idle.setDetectionInterval(60);
@@ -63,7 +63,6 @@ chrome.runtime.onInstalled.addListener(async () => {
     }
 });
 
-// 🎯 FIX: The Ghost Session Cleanup & Startup Handshake
 chrome.runtime.onStartup.addListener(async () => {
     console.log("🧹 Chrome started. Cleaning up ghost sessions & verifying identity...");
     await chrome.storage.local.set({ activeSession: null });
@@ -78,7 +77,7 @@ chrome.runtime.onStartup.addListener(async () => {
 });
 
 // ==========================================
-// 📨 MESSAGE LISTENERS (NEW)
+// 📨 MESSAGE LISTENERS
 // ==========================================
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === "force_sync") {
@@ -86,7 +85,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         syncConfig().then(() => {
             sendResponse({ success: true });
         });
-        return true; // Keep the message channel open for the async response
+        return true; 
     }
 });
 
@@ -94,7 +93,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 // ⏱️ THE STOPWATCH & HIT TRACKER
 // ==========================================
 
-// Helper 1: Extract domain for ROI Time Tracking
 function extractDomain(urlStr) {
     try {
         const cleanUrl = urlStr.split('#')[0];
@@ -106,7 +104,7 @@ function extractDomain(urlStr) {
     }
 }
 
-// Helper 2: URL Normalizer for Audit Hit Tracking (Smarter SPA Tracking)
+// 🎯 NEW: Smart URL Normalizer (Query String Allowlist)
 function normalizeUrl(urlStr) {
     try {
         const urlObj = new URL(urlStr);
@@ -115,42 +113,56 @@ function normalizeUrl(urlStr) {
         const domain = urlObj.hostname.replace(/^www\./, '');
         let path = urlObj.pathname;
         
-        // 🎯 FIX: Preserve SPA routes that use hashes (e.g. #/dashboard) 
-        // while still stripping standard anchor tags (e.g. #section1)
+        // Preserve SPA hash routes
         if (urlObj.hash.startsWith('#/')) {
             path += urlObj.hash;
         }
         
-        // Clean up root paths ONLY if there is no hash path appended
         if (path === '/') path = ''; 
         
-        return domain + path;
+        // Smart Query String Allowlist
+        let queryString = '';
+        if (domain === 'youtube.com' && urlObj.searchParams.has('v')) {
+            queryString = `?v=${urlObj.searchParams.get('v')}`;
+        } else if ((domain === 'google.com' || domain === 'bing.com') && urlObj.searchParams.has('q')) {
+            queryString = `?q=${urlObj.searchParams.get('q')}`;
+        } 
+        // For docs.google.com and everything else, queryString remains empty, stripping all tokens!
+
+        return domain + path + queryString;
     } catch (e) {
         return null;
     }
 }
 
-// Records an exact URL visit (Bypasses 5-minute rule)
-async function recordUrlHit(urlStr) {
+// 🎯 UPDATED: Records URL hit and caches the Tab Title
+async function recordUrlHit(urlStr, title) {
     const normalized = normalizeUrl(urlStr);
     if (!normalized) return;
 
-    const data = await chrome.storage.local.get(['hitLogs']);
+    const data = await chrome.storage.local.get(['hitLogs', 'titleCache']);
     let hitLogs = data.hitLogs || {};
+    let titleCache = data.titleCache || {};
 
     hitLogs[normalized] = (hitLogs[normalized] || 0) + 1;
-    await chrome.storage.local.set({ hitLogs });
+    
+    if (title) {
+        titleCache[normalized] = title;
+    }
+
+    await chrome.storage.local.set({ hitLogs, titleCache });
 }
 
-// Closes previous timer and starts a new one
-async function updateActiveSession(newUrl, isIdleOrInactive) {
-    const data = await chrome.storage.local.get(['activeSession', 'timeLogs']);
+// 🎯 UPDATED: Updates Active Session and caches Domain Title
+async function updateActiveSession(newUrl, isIdleOrInactive, title) {
+    const data = await chrome.storage.local.get(['activeSession', 'timeLogs', 'titleCache']);
     let timeLogs = data.timeLogs || {};
     let activeSession = data.activeSession || null;
+    let titleCache = data.titleCache || {};
 
     const now = Date.now();
 
-    // 1. Close out the previous session if one exists
+    // 1. Close out the previous session
     if (activeSession) {
         const elapsedMs = now - activeSession.startTime;
         const elapsedMins = elapsedMs / (1000 * 60);
@@ -167,28 +179,28 @@ async function updateActiveSession(newUrl, isIdleOrInactive) {
         const domain = extractDomain(newUrl);
         if (domain) {
             activeSession = { domain: domain, startTime: now };
+            if (title) {
+                titleCache[domain] = title; // Also save the title for the base domain
+            }
         } else {
             activeSession = null;
         }
     }
 
-    await chrome.storage.local.set({ activeSession, timeLogs });
+    await chrome.storage.local.set({ activeSession, timeLogs, titleCache });
 }
 
 // ==========================================
 // 🎧 BROWSER EVENT LISTENERS
 // ==========================================
 
-const DEBUG_MODE = true; // Toggle to false for production
+const DEBUG_MODE = true; 
 const tabUrlCache = {};
 
 function debugLog(message, data = null) {
     if (DEBUG_MODE) {
-        if (data) {
-            console.log(`[DEBUG] ${message}`, data);
-        } else {
-            console.log(`[DEBUG] ${message}`);
-        }
+        if (data) console.log(`[DEBUG] ${message}`, data);
+        else console.log(`[DEBUG] ${message}`);
     }
 }
 
@@ -200,54 +212,62 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 
     if (tab.url !== tabUrlCache[activeInfo.tabId]) {
         tabUrlCache[activeInfo.tabId] = tab.url;
-        await recordUrlHit(tab.url);
+        await recordUrlHit(tab.url, tab.title);
     }
 
-    await updateActiveSession(tab.url, false);
+    await updateActiveSession(tab.url, false, tab.title);
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     if (!tab.url) return;
-    debugLog(`Tab ${tabId} Updated. changeInfo:`, changeInfo);
+    
+    // 🎯 NEW: If the tab changes its title (e.g. Google Doc finishes loading), update our cache!
+    if (changeInfo.title) {
+        const normalized = normalizeUrl(tab.url);
+        const domain = extractDomain(tab.url);
+        const data = await chrome.storage.local.get('titleCache');
+        let titleCache = data.titleCache || {};
+        if (normalized) titleCache[normalized] = changeInfo.title;
+        if (domain) titleCache[domain] = changeInfo.title;
+        await chrome.storage.local.set({ titleCache });
+    }
     
     if (tab.url !== tabUrlCache[tabId]) {
         debugLog(`🎯 HIT RECORDED! Domain: ${tab.url}`);
         tabUrlCache[tabId] = tab.url; 
         
-        await recordUrlHit(tab.url);
+        await recordUrlHit(tab.url, tab.title);
         
         if (tab.active) {
-            await updateActiveSession(tab.url, false);
+            await updateActiveSession(tab.url, false, tab.title);
         }
     }
 });
 
-// 🎯 FIX: Comprehensive SPA and Hash Navigation Tracking
+// Comprehensive SPA and Hash Navigation Tracking
 if (chrome.webNavigation) {
     const handleSpaNavigation = async (details) => {
-        if (details.frameId === 0) { // Only track the main frame, ignore iframes
+        if (details.frameId === 0) { 
             debugLog(`🔄 SPA Navigation detected: ${details.url}`);
             
             if (details.url !== tabUrlCache[details.tabId]) {
                 tabUrlCache[details.tabId] = details.url;
-                await recordUrlHit(details.url);
-
+                
                 try {
                     const tab = await chrome.tabs.get(details.tabId);
+                    await recordUrlHit(details.url, tab ? tab.title : null);
+
                     if (tab && tab.active) {
-                        await updateActiveSession(details.url, false);
+                        await updateActiveSession(details.url, false, tab.title);
                     }
                 } catch (err) {
-                    debugLog("Could not fetch tab during SPA navigation", err);
+                    await recordUrlHit(details.url, null);
                 }
             }
         }
     };
 
-    // React/Angular router (History API pushes)
     chrome.webNavigation.onHistoryStateUpdated.addListener(handleSpaNavigation);
-    
-    // Hash-based routers (site.com/#/path)
     chrome.webNavigation.onReferenceFragmentUpdated.addListener(handleSpaNavigation);
     
 } else {
@@ -264,7 +284,7 @@ chrome.tabs.onReplaced.addListener(async (addedTabId, removedTabId) => {
     
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tabs.length > 0 && tabs[0].id === addedTabId) {
-        await updateActiveSession(tabs[0].url, false);
+        await updateActiveSession(tabs[0].url, false, tabs[0].title);
     }
 });
 
@@ -275,22 +295,22 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
     if (windowId === chrome.windows.WINDOW_ID_NONE) {
-        await updateActiveSession(null, true);
+        await updateActiveSession(null, true, null);
     } else {
         const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
         if (tabs.length > 0) {
-            await updateActiveSession(tabs[0].url, false);
+            await updateActiveSession(tabs[0].url, false, tabs[0].title);
         }
     }
 });
 
 chrome.idle.onStateChanged.addListener(async (newState) => {
     if (newState === 'idle' || newState === 'locked') {
-        await updateActiveSession(null, true);
+        await updateActiveSession(null, true, null);
     } else if (newState === 'active') {
         const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
         if (tabs.length > 0) {
-            await updateActiveSession(tabs[0].url, false);
+            await updateActiveSession(tabs[0].url, false, tabs[0].title);
         }
     }
 });
@@ -302,7 +322,6 @@ chrome.idle.onStateChanged.addListener(async (newState) => {
 async function syncConfig() {
     console.log("🔄 Fetching Insight Settings from Cloudflare...");
     
-    // 🎯 FIX: Retrieve the locked schoolId from local storage
     const data = await chrome.storage.local.get('schoolId');
     const schoolId = data.schoolId || 1;
     
@@ -311,7 +330,6 @@ async function syncConfig() {
         const localConfig = await (await fetch(configUrl)).json();
         const baseUrl = localConfig.workerUrl.endsWith('/') ? localConfig.workerUrl.slice(0, -1) : localConfig.workerUrl;
 
-        // 🎯 FIX: Append schoolId to the query
         const response = await fetch(`${baseUrl}/api/insight/sync?schoolId=${schoolId}`);
         if (!response.ok) throw new Error("Sync failed");
         
@@ -331,44 +349,40 @@ async function syncConfig() {
 async function uploadLogs() {
     console.log("📤 Preparing to batch upload time & hit logs...");
     
-    // 🎯 1. Instant Offline Queueing Check
     if (!navigator.onLine) {
-        console.log("📶 Device is offline. Telemetry securely queued in local storage for next hour.");
+        console.log("📶 Device is offline. Telemetry securely queued in local storage.");
         return;
     }
 
     try {
-        // Force the stopwatch to close out the current session
         const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
         if (tabs.length > 0) {
-            await updateActiveSession(tabs[0].url, false);
+            await updateActiveSession(tabs[0].url, false, tabs[0].title);
         }
 
-        const data = await chrome.storage.local.get(['studentHash', 'timeLogs', 'hitLogs', 'approvedApps', 'systemConfig']);
+        const data = await chrome.storage.local.get(['studentHash', 'timeLogs', 'hitLogs', 'approvedApps', 'systemConfig', 'titleCache']);
         
         const timeLogs = data.timeLogs || {};
         const hitLogs = data.hitLogs || {};
+        const titleCache = data.titleCache || {};
         const approvedSet = new Set(data.approvedApps || []);
         const threshold = parseFloat(data.systemConfig?.insight_unapproved_threshold_minutes || "5");
 
         const masterLogs = [];
 
-        // 1. Process Time Logs (Filtered by threshold rule)
+        // 1. Process Time Logs
         for (const [domain, minutes] of Object.entries(timeLogs)) {
             if (approvedSet.has(domain) || minutes >= threshold) {
-                masterLogs.push({ type: "time", target: domain, value: minutes });
+                masterLogs.push({ type: "time", target: domain, value: minutes, title: titleCache[domain] || null });
             }
         }
 
-        // 2. Process Hit Logs (Exact URLs, NO time threshold)
+        // 2. Process Hit Logs
         for (const [url, hits] of Object.entries(hitLogs)) {
-            masterLogs.push({ type: "hit", target: url, value: hits });
+            masterLogs.push({ type: "hit", target: url, value: hits, title: titleCache[url] || null });
         }
 
-        if (masterLogs.length === 0) {
-            console.log("No significant logs to upload this hour. Queue rolling over.");
-            return;
-        }
+        if (masterLogs.length === 0) return;
 
         const configUrl = chrome.runtime.getURL("config.json");
         const localConfig = await (await fetch(configUrl)).json();
@@ -376,7 +390,6 @@ async function uploadLogs() {
 
         const MAX_PAYLOAD_SIZE = 200; 
         
-        // 🎯 2. Track EXACTLY what we upload successfully
         const successfullyUploadedTime = {};
         const successfullyUploadedHits = {};
 
@@ -394,11 +407,10 @@ async function uploadLogs() {
                 });
 
                 if (!response.ok) {
-                    console.error(`❌ Chunk ${i / MAX_PAYLOAD_SIZE + 1} failed. Stopping upload to queue remaining data.`);
+                    console.error(`❌ Chunk ${i / MAX_PAYLOAD_SIZE + 1} failed.`);
                     break; 
                 }
 
-                // If chunk succeeded, record it for safe deletion later
                 chunk.forEach(log => {
                     if (log.type === 'time') successfullyUploadedTime[log.target] = log.value;
                     if (log.type === 'hit') successfullyUploadedHits[log.target] = log.value;
@@ -406,23 +418,23 @@ async function uploadLogs() {
 
             } catch (fetchErr) {
                 console.error("📶 Network error mid-upload. Queueing remaining data.", fetchErr);
-                break; // Break the loop so we don't try to send more chunks while offline
+                break; 
             }
         }
 
-        // 🎯 3. Safe Subtraction (Fixes Race Conditions & Threshold Resets)
-        const currentData = await chrome.storage.local.get(['timeLogs', 'hitLogs']);
+        const currentData = await chrome.storage.local.get(['timeLogs', 'hitLogs', 'titleCache']);
         let currentTime = currentData.timeLogs || {};
         let currentHits = currentData.hitLogs || {};
+        let currentTitles = currentData.titleCache || {};
 
         let removedCount = 0;
 
-        // Subtract only what was safely delivered to Cloudflare
         for (const [domain, minutes] of Object.entries(successfullyUploadedTime)) {
             if (currentTime[domain]) {
                 currentTime[domain] -= minutes;
                 if (currentTime[domain] <= 0.01) { 
                     delete currentTime[domain];
+                    delete currentTitles[domain]; // 🎯 Cleanup Title Cache
                 }
                 removedCount++;
             }
@@ -433,14 +445,14 @@ async function uploadLogs() {
                 currentHits[url] -= hits;
                 if (currentHits[url] <= 0) {
                     delete currentHits[url];
+                    delete currentTitles[url]; // 🎯 Cleanup Title Cache
                 }
                 removedCount++;
             }
         }
 
-        // Save the reconciled state back to storage
-        await chrome.storage.local.set({ timeLogs: currentTime, hitLogs: currentHits });
-        console.log(`✅ Upload cycle complete. Safely subtracted ${removedCount} synced items from local queue.`);
+        await chrome.storage.local.set({ timeLogs: currentTime, hitLogs: currentHits, titleCache: currentTitles });
+        console.log(`✅ Upload cycle complete. Safely subtracted ${removedCount} synced items.`);
 
     } catch (err) {
         console.error("❌ Batch Upload Error:", err);
